@@ -125,11 +125,10 @@ function pgStore() {
   };
 }
 
-// SINGLE declaration here (fixes “Identifier 'store' has already been declared”)
 const store = DATABASE_URL ? pgStore() : fileStore();
 
 /* --------------- ROUTES -------------- */
-// Poster
+// Poster page
 app.get('/kiosk', async (req, res) => {
   const scanUrl = `${buildBaseUrl(req)}/kiosk/scan`;
   const dataUrl = await QRCode.toDataURL(scanUrl, { errorCorrectionLevel: 'M', margin: 1, scale: 10 });
@@ -177,7 +176,7 @@ app.get('/kiosk', async (req, res) => {
   res.send(html);
 });
 
-// PDF export
+// PDF export of the poster
 app.get('/kiosk.pdf', async (req, res) => {
   let puppeteer;
   try { puppeteer = require('puppeteer'); }
@@ -213,12 +212,13 @@ app.get('/kiosk/qr.png', async (req, res) => {
   res.send(buf);
 });
 
-// Debug: shows chosen ad and final redirect URL
+// Debug: see chosen ad and final redirect
 app.get('/kiosk/debug', (req, res) => {
   const n = pickAd();
   const target = new URL(GAME_URL);
   target.searchParams.set('ad', n);
   target.searchParams.set('pack', `ad${n}`);
+  target.searchParams.set('t', Date.now().toString());
   res.type('text/plain').send(
     `FORCE_AD=${FORCE_AD || '(none)'}\n` +
     `selectedAd=${n}\n` +
@@ -226,7 +226,7 @@ app.get('/kiosk/debug', (req, res) => {
   );
 });
 
-// Scan: count then redirect, always adding ?ad and ?pack
+// Scan: count then redirect, always adding ?ad & ?pack & cache-buster
 app.get('/kiosk/scan', async (req, res) => {
   await store.bumpScan();
   await store.bumpRedirect();
@@ -234,6 +234,7 @@ app.get('/kiosk/scan', async (req, res) => {
   const target = new URL(GAME_URL);
   target.searchParams.set('ad', n);
   target.searchParams.set('pack', `ad${n}`);
+  target.searchParams.set('t', Date.now().toString()); // cache-bust the game index
   console.log(`[scan] FORCE_AD=${FORCE_AD || '(none)'} -> ad=${n}; redirect=${target.toString()}`);
   res.set('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
   return res.redirect(302, target.toString());
@@ -252,12 +253,10 @@ app.get('/kiosk/stats', async (req, res) => {
   <table border="1" cellpadding="5"><tr><th>Date</th><th>Scans</th><th>Redirects</th></tr>${body}</table>
   </body></html>`);
 });
-
 app.get('/kiosk/stats.json', async (req, res) => {
   if (requireAdmin(req, res)) return;
   res.json(await store.getMetrics());
 });
-
 app.get('/kiosk/stats.csv', async (req, res) => {
   if (requireAdmin(req, res)) return;
   const rows = await store.getMetricsRows();
