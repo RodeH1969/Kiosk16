@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Flashka</title>
+
+  <!-- Select today's ad pack (/ad1..ad7) using Brisbane weekday.
+       Overrides: ?ad=1..7 or ?pack=ad6 or ?pack=ads/remy-special -->
+  <script>
+  (function () {
+    const params = new URLSearchParams(location.search);
+    const root = document.documentElement;
+    const set = (name, url) => root.style.setProperty(name, `url('${url}')`);
+
+    const weekday = new Intl.DateTimeFormat('en-AU', {
+      timeZone: 'Australia/Brisbane',
+      weekday: 'short'
+    }).format(new Date()); // Mon..Sun
+    const map = { Mon:1, Tue:2, Wed:3, Thu:4, Fri:5, Sat:6, Sun:7 };
+
+    function chooseBase() {
+      const ad = params.get('ad');               // ?ad=1..7
+      if (ad && /^[1-7]$/.test(ad)) return `/ad${ad}`;
+      const pack = params.get('pack');           // ?pack=ad6 or ?pack=ads/remy
+      if (pack) {
+        if (/^ad[1-7]$/i.test(pack)) return `/${pack.toLowerCase()}`;
+        return `/${pack.replace(/^\//, '')}`;    // allow custom folders
+      }
+      return `/ad${map[weekday] || 1}`;          // default rotation
+    }
+
+    const base = chooseBase();
+    document.documentElement.setAttribute('data-adpack', base.replace(/^\//,''));
+
+    // All PNG now
+    set('--front', `${base}/logo.png`);
+    for (let i = 1; i <= 10; i++) {
+      set(`--img${i}`, `${base}/${i}.png`);
+    }
+  })();
+  </script>
+
+  <!-- Styles (bump version if you need a hard refresh) -->
+  <link rel="stylesheet" href="/css/style.css?v=0904-png" />
+  <link rel="stylesheet" href="/css/winfx.css?v=0845-combo" />
+  <link rel="stylesheet" href="/css/losefx.css?v=0845-combo" />
+
+  <!-- Game scripts -->
+  <script defer src="/js/script.js?v=0851-21"></script>
+  <script defer src="/js/winfx.js?v=0845-combo"></script>
+  <script defer src="/js/losefx.js?v=0845-combo"></script>
+</head>
+<body>
+  <div class="container">
+    <h1>Flashka</h1>
+    <p class="instructions">
+      Use your memory skills to match the 10 images in 21 card flips or less to win a CHOCCY surprise with your coffee!
+    </p>
+
+    <div class="status">
+      <p class="attempts-had">Attempts Had: <span class="number" id="attempts">0</span></p>
+      <p class="attempts-left">Attempts Left: <span class="number" id="attempts-left">21</span></p>
+    </div>
+
+    <div class="game-board" id="game-board"></div>
+
+    <!-- Undercard: shows today's pack logo automatically -->
+    <div class="undercard">
+      <div class="brand-logo" title="Sponsor"></div>
+    </div>
+
+    <div class="result" id="result" style="display:none;">
+      <p id="result-message"></p>
+      <p id="times-played"></p>
+      <div id="game-over-box" class="game-over-box"></div>
+      <!-- Shown only on WIN. No restart button. -->
+      <button id="share-btn" style="display:none">Send SMS</button>
+    </div>
+  </div>
+
+  <!-- Overlay roots are injected dynamically by winfx.js and losefx.js -->
+</body>
+</html>

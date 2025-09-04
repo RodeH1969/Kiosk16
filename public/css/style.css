@@ -1,0 +1,166 @@
+/* =========================================================
+   Flashka – layout + ad-pack mapping (7-day rotation, PNG-only)
+   ========================================================= */
+:root {
+  --container-max: 980px;
+  --board-gap: 10px;
+  --card-w: 120px;
+  --card-h: 140px;
+  --card-radius: 12px;
+  --accent: #0a8f3a;
+  --text: #222;
+  --muted: #666;
+  --bg: #f7f7f7;
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+  color: var(--text);
+  background: var(--bg);
+}
+
+.container {
+  max-width: var(--container-max);
+  margin: 24px auto;
+  padding: 0 16px 32px;
+}
+
+h1 {
+  margin: 0 0 4px;
+  font-size: 28px;
+  line-height: 1.2;
+  color: var(--accent);
+}
+.instructions {
+  margin: 0 0 12px;
+  color: var(--muted);
+}
+
+.status {
+  display: flex;
+  gap: 18px;
+  align-items: center;
+  margin-bottom: 14px;
+}
+.status .number {
+  font-weight: 700;
+  color: #111;
+}
+
+/* =========================================================
+   Board & card shell (generic; compatible with common JS)
+   ========================================================= */
+.game-board {
+  display: grid;
+  grid-template-columns: repeat(5, var(--card-w));
+  grid-auto-rows: var(--card-h);
+  gap: var(--board-gap);
+  justify-content: center;
+  margin: 12px auto 6px;
+}
+
+/* Typical memory card structure:
+   .card > .inner > (.card-front + .card-back)
+*/
+.card {
+  width: var(--card-w);
+  height: var(--card-h);
+  perspective: 900px;
+}
+.card .inner {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  border-radius: var(--card-radius);
+  transform-style: preserve-3d;
+  transition: transform 0.35s ease;
+  box-shadow: 0 10px 24px rgba(0,0,0,0.08);
+}
+.card.flipped .inner { transform: rotateY(180deg); }
+
+.card-front, .card-back {
+  position: absolute;
+  inset: 0;
+  backface-visibility: hidden;
+  border-radius: var(--card-radius);
+  overflow: hidden;
+  background-color: #fff;
+}
+.card-front { transform: rotateY(180deg); }
+
+/* Ensure images scale nicely */
+.card-front,
+.card-back,
+.card-back[class*="image-"] {
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+
+/* =========================================================
+   AD PACK MAPPING (variables with ad1 Dexter PNG fallbacks)
+   Folders: /ad1 ... /ad7
+   Files inside each: logo.png, 1.png..10.png
+   ========================================================= */
+
+/* FRONT: pack logo (fallback to ad1 Dexter logo) */
+.card-front {
+  background-image: var(--front, url('/ad1/Dexter_logo.png'));
+}
+
+/* BACKS: 10 faces (fallback to ad1 Dexter) */
+.card-back.image-1  { background-image: var(--img1,  url('/ad1/Dexter1.png')); }
+.card-back.image-2  { background-image: var(--img2,  url('/ad1/Dexter2.png')); }
+.card-back.image-3  { background-image: var(--img3,  url('/ad1/Dexter3.png')); }
+.card-back.image-4  { background-image: var(--img4,  url('/ad1/Dexter4.png')); }
+.card-back.image-5  { background-image: var(--img5,  url('/ad1/Dexter5.png')); }
+.card-back.image-6  { background-image: var(--img6,  url('/ad1/Dexter6.png')); }
+.card-back.image-7  { background-image: var(--img7,  url('/ad1/Dexter7.png')); }
+.card-back.image-8  { background-image: var(--img8,  url('/ad1/Dexter8.png')); } /* now PNG */
+.card-back.image-9  { background-image: var(--img9,  url('/ad1/Dexter9.png')); }
+.card-back.image-10 { background-image: var(--img10, url('/ad1/Dexter10.png')); }
+
+/* =========================================================
+   UNDERCARD (brand strip below the board)
+   ========================================================= */
+.undercard {
+  margin-top: 12px;
+  display: flex;
+  justify-content: center;
+}
+.undercard .brand-logo {
+  width: 220px;
+  height: 60px;
+  background-image: var(--front, url('/ad1/Dexter_logo.png'));
+  background-size: contain;
+  background-position: center;
+  background-repeat: no-repeat;
+  filter: drop-shadow(0 2px 8px rgba(0,0,0,0.1));
+}
+
+/* =========================================================
+   Result box basics
+   ========================================================= */
+.result { margin-top: 16px; }
+.game-over-box {
+  margin-top: 8px;
+  padding: 12px;
+  border-radius: 10px;
+  background: #fff;
+  border: 1px solid #eee;
+}
+
+/* =========================================================
+   Responsive tweaks
+   ========================================================= */
+@media (max-width: 680px) {
+  :root {
+    --card-w: 90px;
+    --card-h: 110px;
+    --board-gap: 8px;
+  }
+  .undercard .brand-logo { width: 180px; height: 54px; }
+}
