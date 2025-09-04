@@ -1,4 +1,4 @@
-// server.js — Static QR kiosk poster + daily scan tracking (Brisbane time)
+// server.js — Static QR kiosk poster + daily scan tracking (Brisbane time) + PDF export
 
 require('dotenv').config();
 const express = require('express');
@@ -14,8 +14,8 @@ const PORT = process.env.PORT || 3030;
 const ADMIN_KEY = process.env.ADMIN_KEY || null;
 const DATABASE_URL = process.env.DATABASE_URL || null;
 
-// Always redirect here after counting scans
-const GAME_URL = 'https://flashka.onrender.com';
+// Redirect target after counting scans (can override via env)
+const GAME_URL = process.env.GAME_URL || 'https://flashka.onrender.com';
 
 // ---------- STATIC ----------
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -100,7 +100,7 @@ function fileStore() {
 function pgStore() {
   const pool = new Pool({
     connectionString: DATABASE_URL,
-    ssl: { rejectUnauthorized: false }, // ok for many hosted PGs
+    ssl: { rejectUnauthorized: false }, // hosted PG
     max: 5,
   });
 
@@ -141,8 +141,7 @@ function pgStore() {
       const out = { tz: BRIS_TZ, days: {} };
       for (const row of r.rows) {
         const d = (row.day instanceof Date ? row.day : new Date(row.day))
-          .toISOString()
-          .slice(0, 10);
+          .toISOString().slice(0, 10);
         out.days[d] = {
           qr_scans: Number(row.qr_scans) || 0,
           redirects: Number(row.redirects) || 0,
@@ -156,8 +155,7 @@ function pgStore() {
       );
       return r.rows.map((row) => {
         const d = (row.day instanceof Date ? row.day : new Date(row.day))
-          .toISOString()
-          .slice(0, 10);
+          .toISOString().slice(0, 10);
         return {
           day: d,
           qr_scans: Number(row.qr_scans) || 0,
@@ -183,6 +181,9 @@ app.get('/kiosk', async (req, res) => {
 <html lang="en"><head>
 <meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>Flashka – Scan to Play</title>
+
+<link href="https://fonts.googleapis.com/css2?family=Bangers&display=swap" rel="stylesheet">
+
 <style>
   :root{--card-w:min(560px,94vw)}
   *{box-sizing:border-box}
@@ -193,10 +194,22 @@ app.get('/kiosk', async (req, res) => {
   .qrBox img{width:min(320px,72vw);height:auto;display:block}
 
   .lines{margin-top:6px;line-height:1.35}
-  .lines .big{font-size:22px;font-weight:700;margin:6px 0 2px}
-  .lines .big.with-choccy{display:inline-flex;align-items:center;gap:10px;justify-content:center}
-  .lines .big.with-choccy img.choccy{max-height:130px;height:auto;width:auto} /* 5x bigger (was 26px) */
-  .lines .mid{font-size:16px;margin:2px 0}
+  .lines .big{font-size:32px;margin:6px 0 2px}
+  .lines .big.with-choccy{display:inline-flex;align-items:center;gap:12px;justify-content:center;flex-wrap:wrap}
+  .lines .big.with-choccy .title{
+    font-family:'Bangers',system-ui,Arial,Helvetica,sans-serif;
+    color:#d32f2f;            /* red */
+    font-weight:700;
+    letter-spacing:.5px;
+    text-transform:uppercase;
+    line-height:1;
+  }
+  /* 2× bigger choccy */
+  .lines .big.with-choccy img.choccy{
+    max-height:260px;
+    height:auto;width:auto;
+  }
+  .lines .mid{font-size:18px;margin:6px 0 2px}
   .lines .small{font-size:14px;color:#444;margin:2px 0}
   .lines .small.emph{font-weight:700;letter-spacing:.5px}
 
@@ -213,7 +226,7 @@ app.get('/kiosk', async (req, res) => {
     </div>
     <div class="lines">
       <div class="big with-choccy">
-        <span>Win a CHOCCY!</span>
+        <span class="title">Win a CHOCCY!</span>
         <img src="/choccy.png" alt="" class="choccy"/>
       </div>
       <div class="mid">1 Scan per visit</div>
@@ -225,7 +238,51 @@ app.get('/kiosk', async (req, res) => {
   res.send(html);
 });
 
-// ---------- QR PNG for printing (route kept; link removed from poster) ----------
+// ---------- PDF export of the kiosk poster ----------
+app.get('/kiosk.pdf', async (req, res) => {
+  // Lazy-load puppeteer so the service can run without it until this route is hit
+  let puppeteer;
+  try {
+    puppeteer = require('puppeteer');
+  } catch (e) {
+    res.status(500).send('Puppeteer not installed. Run: npm install puppeteer');
+    return;
+  }
+
+  const targetUrl = `${buildBaseUrl(req)}/kiosk`;
+  const size = String(req.query.size || 'A4').toUpperCase(); // A4 | A3 | LETTER ...
+  const margin = String(req.query.margin || '10mm');         // e.g., 0, 8mm, 0.5in
+
+  let browser;
+  try {
+    browser = await puppeteer.launch({
+      headless: 'new',
+      args: ['--no-sandbox', '--disable-setuid-sandbox'],
+    });
+    const page = await browser.newPage();
+
+    // Load the kiosk page; wait for fonts/images to finish
+    await page.goto(targetUrl, { waitUntil: 'networkidle0', timeout: 60000 });
+
+    const pdf = await page.pdf({
+      format: size,
+      printBackground: true,
+      margin: { top: margin, right: margin, bottom: margin, left: margin }
+    });
+
+    await browser.close();
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="kiosk-${size.toLowerCase()}.pdf"`);
+    res.send(pdf);
+  } catch (err) {
+    if (browser) { try { await browser.close(); } catch {} }
+    console.error('PDF error:', err);
+    res.status(500).send('Failed to generate PDF.');
+  }
+});
+
+// ---------- QR PNG for printing (kept available if you prefer image) ----------
 app.get('/kiosk/qr.png', async (req, res) => {
   const scanUrl = `${buildBaseUrl(req)}/kiosk/scan`;
   const buf = await makeQrPngBuffer(scanUrl);
@@ -238,7 +295,6 @@ app.get('/kiosk/qr.png', async (req, res) => {
 app.get('/kiosk/scan', async (req, res) => {
   await store.bumpScan();
   await store.bumpRedirect();
-  // avoid caches reusing the redirect
   res.set('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
   return res.redirect(302, GAME_URL);
 });
