@@ -1,4 +1,4 @@
-// server.js — Kiosk poster + daily scan tracking + PDF + FORCE_AD override (always)
+// server.js — Kiosk poster + daily scan tracking + PDF + FORCE_AD override
 
 require('dotenv').config();
 const express = require('express');
@@ -9,22 +9,23 @@ const { Pool } = require('pg');
 
 const app = express();
 
-// ---------- CONFIG ----------
+/* ------------------ CONFIG ------------------ */
 const PORT = process.env.PORT || 3030;
 const ADMIN_KEY = process.env.ADMIN_KEY || null;
 const DATABASE_URL = process.env.DATABASE_URL || null;
 const GAME_URL = process.env.GAME_URL || 'https://flashka.onrender.com';
-
-// ONE-CHANGE override: set 1..7 in env to force a pack; blank = weekday rotation
+// One-change ad control: set 1..7 to force a specific pack (blank = weekday rotation)
 const FORCE_AD = (process.env.FORCE_AD || '').trim();
 
-// ---------- STATIC ----------
+/* ------------------ STATIC ------------------ */
 const PUBLIC_DIR = path.join(__dirname, 'public');
 app.use(express.static(PUBLIC_DIR));
 app.use(express.json());
 
-// ---------- TIMEZONE / HELPERS ----------
+/* --------------- TIME / HELPERS -------------- */
 const BRIS_TZ = 'Australia/Brisbane';
+const DOW_TO_AD = { Mon:1, Tue:2, Wed:3, Thu:4, Fri:5, Sat:6, Sun:7 };
+
 function dayKeyBrisbane(d = new Date()) {
   return new Intl.DateTimeFormat('en-CA', {
     timeZone: BRIS_TZ, year: 'numeric', month: '2-digit', day: '2-digit',
@@ -42,14 +43,13 @@ function requireAdmin(req, res) {
   res.status(401).send('Unauthorized. Append ?key=YOUR_ADMIN_KEY to the URL.');
   return 'blocked';
 }
-const DOW_TO_AD = { Mon:1, Tue:2, Wed:3, Thu:4, Fri:5, Sat:6, Sun:7 };
 function pickAd() {
-  if (/^[1-7]$/.test(FORCE_AD)) return FORCE_AD;
+  if (/^[1-7]$/.test(FORCE_AD)) return FORCE_AD; // forced value
   const weekday = new Intl.DateTimeFormat('en-AU', { timeZone: BRIS_TZ, weekday: 'short' }).format(new Date());
   return String(DOW_TO_AD[weekday] || 1);
 }
 
-// ---------- STORAGE (PG or JSON) ----------
+/* --------------- STORAGE (PG/JSON) -------------- */
 const DATA_DIR = path.join(__dirname, 'data');
 const METRICS_FILE = path.join(DATA_DIR, 'metrics.json');
 
@@ -124,9 +124,12 @@ function pgStore() {
     },
   };
 }
+
+// SINGLE declaration here (fixes “Identifier 'store' has already been declared”)
 const store = DATABASE_URL ? pgStore() : fileStore();
 
-// ---------- KIOSK POSTER ----------
+/* --------------- ROUTES -------------- */
+// Poster
 app.get('/kiosk', async (req, res) => {
   const scanUrl = `${buildBaseUrl(req)}/kiosk/scan`;
   const dataUrl = await QRCode.toDataURL(scanUrl, { errorCorrectionLevel: 'M', margin: 1, scale: 10 });
@@ -174,7 +177,7 @@ app.get('/kiosk', async (req, res) => {
   res.send(html);
 });
 
-// ---------- PDF export ----------
+// PDF export
 app.get('/kiosk.pdf', async (req, res) => {
   let puppeteer;
   try { puppeteer = require('puppeteer'); }
@@ -201,7 +204,7 @@ app.get('/kiosk.pdf', async (req, res) => {
   }
 });
 
-// ---------- QR PNG ----------
+// QR PNG
 app.get('/kiosk/qr.png', async (req, res) => {
   const scanUrl = `${buildBaseUrl(req)}/kiosk/scan`;
   const buf = await makeQrPngBuffer(scanUrl);
@@ -210,7 +213,7 @@ app.get('/kiosk/qr.png', async (req, res) => {
   res.send(buf);
 });
 
-// ---------- DEBUG: see which ad & redirect URL will be used ----------
+// Debug: shows chosen ad and final redirect URL
 app.get('/kiosk/debug', (req, res) => {
   const n = pickAd();
   const target = new URL(GAME_URL);
@@ -223,24 +226,20 @@ app.get('/kiosk/debug', (req, res) => {
   );
 });
 
-// ---------- SCAN (counts -> redirect) ----------
-// Always override the pack on redirect, and send both ?ad and ?pack for compatibility
+// Scan: count then redirect, always adding ?ad and ?pack
 app.get('/kiosk/scan', async (req, res) => {
   await store.bumpScan();
   await store.bumpRedirect();
-
   const n = pickAd();
   const target = new URL(GAME_URL);
   target.searchParams.set('ad', n);
   target.searchParams.set('pack', `ad${n}`);
-
   console.log(`[scan] FORCE_AD=${FORCE_AD || '(none)'} -> ad=${n}; redirect=${target.toString()}`);
-
   res.set('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
   return res.redirect(302, target.toString());
 });
 
-// ---------- STATS ----------
+// Stats
 app.get('/kiosk/stats', async (req, res) => {
   if (requireAdmin(req, res)) return;
   const rows = await store.getMetricsRows();
@@ -272,8 +271,7 @@ app.get('/kiosk/stats.csv', async (req, res) => {
 // Root -> poster
 app.get('/', (req, res) => res.redirect('/kiosk'));
 
-// ---------- STORAGE SELECTOR & BOOT ----------
-const store = DATABASE_URL ? pgStore() : fileStore();
+/* ------------------ BOOT ------------------ */
 (async () => {
   if (store.init) await store.init();
   app.listen(PORT, () => {
