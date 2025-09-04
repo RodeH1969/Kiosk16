@@ -1,4 +1,4 @@
-// server.js — Kiosk poster + daily scan tracking + PDF + forced ad control
+// server.js — Kiosk poster + daily scan tracking + PDF + FORCE_AD override (always)
 
 require('dotenv').config();
 const express = require('express');
@@ -9,14 +9,14 @@ const { Pool } = require('pg');
 
 const app = express();
 
-// ---------- CONFIG (set these in Render/ .env) ----------
+// ---------- CONFIG ----------
 const PORT = process.env.PORT || 3030;
 const ADMIN_KEY = process.env.ADMIN_KEY || null;
 const DATABASE_URL = process.env.DATABASE_URL || null;
-// Redirect target after counting scans
 const GAME_URL = process.env.GAME_URL || 'https://flashka.onrender.com';
-// ONE-CHANGE AD CONTROL: set 1..7 to force a specific pack (e.g. 4 = Agentw)
-const FORCE_AD = (process.env.FORCE_AD || '').trim(); // '' = rotate by weekday
+
+// ONE-CHANGE override: set 1..7 in env to force a pack; blank = weekday rotation
+const FORCE_AD = (process.env.FORCE_AD || '').trim();
 
 // ---------- STATIC ----------
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -34,9 +34,7 @@ function buildBaseUrl(req) {
   return `${req.protocol}://${req.get('host')}`;
 }
 async function makeQrPngBuffer(text, opts = {}) {
-  return QRCode.toBuffer(text, {
-    errorCorrectionLevel: 'M', margin: 1, scale: 10, ...opts,
-  });
+  return QRCode.toBuffer(text, { errorCorrectionLevel: 'M', margin: 1, scale: 10, ...opts });
 }
 function requireAdmin(req, res) {
   if (!ADMIN_KEY) return null;
@@ -44,10 +42,9 @@ function requireAdmin(req, res) {
   res.status(401).send('Unauthorized. Append ?key=YOUR_ADMIN_KEY to the URL.');
   return 'blocked';
 }
-// Choose ?ad= value
 const DOW_TO_AD = { Mon:1, Tue:2, Wed:3, Thu:4, Fri:5, Sat:6, Sun:7 };
 function pickAd() {
-  if (/^[1-7]$/.test(FORCE_AD)) return FORCE_AD; // forced
+  if (/^[1-7]$/.test(FORCE_AD)) return FORCE_AD;
   const weekday = new Intl.DateTimeFormat('en-AU', { timeZone: BRIS_TZ, weekday: 'short' }).format(new Date());
   return String(DOW_TO_AD[weekday] || 1);
 }
@@ -56,13 +53,8 @@ function pickAd() {
 const DATA_DIR = path.join(__dirname, 'data');
 const METRICS_FILE = path.join(DATA_DIR, 'metrics.json');
 
-function ensureDataDir() {
-  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-}
-function loadJson(file, fallback) {
-  try { return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf-8')) : fallback; }
-  catch { return fallback; }
-}
+function ensureDataDir() { if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true }); }
+function loadJson(file, fallback) { try { return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf-8')) : fallback; } catch { return fallback; } }
 function saveJson(file, obj) { fs.writeFileSync(file, JSON.stringify(obj, null, 2)); }
 
 function fileStore() {
@@ -105,18 +97,14 @@ function pgStore() {
       await pool.query(
         `INSERT INTO metrics_days(day, qr_scans, redirects)
          VALUES ($1::date, 1, 0)
-         ON CONFLICT (day) DO UPDATE SET qr_scans = metrics_days.qr_scans + 1`,
-        [day]
-      );
+         ON CONFLICT (day) DO UPDATE SET qr_scans = metrics_days.qr_scans + 1`, [day]);
     },
     async bumpRedirect() {
       const day = dayKeyBrisbane();
       await pool.query(
         `INSERT INTO metrics_days(day, qr_scans, redirects)
          VALUES ($1::date, 0, 1)
-         ON CONFLICT (day) DO UPDATE SET redirects = metrics_days.redirects + 1`,
-        [day]
-      );
+         ON CONFLICT (day) DO UPDATE SET redirects = metrics_days.redirects + 1`, [day]);
     },
     async getMetrics() {
       const r = await pool.query(`SELECT day, qr_scans, redirects FROM metrics_days ORDER BY day`);
@@ -160,10 +148,9 @@ app.get('/kiosk', async (req, res) => {
   .lines .big{font-size:32px;margin:6px 0 2px}
   .lines .big.with-choccy{display:inline-flex;align-items:center;gap:12px;justify-content:center;flex-wrap:wrap}
   .lines .big.with-choccy .title{
-    font-family:'Bangers',system-ui,Arial,Helvetica,sans-serif;color:#d32f2f;font-weight:700;letter-spacing:.5px;
-    text-transform:uppercase;line-height:1;
+    font-family:'Bangers',system-ui,Arial,Helvetica,sans-serif;color:#d32f2f;font-weight:700;letter-spacing:.5px;text-transform:uppercase;line-height:1;
   }
-  .lines .big.with-choccy img.choccy{max-height:260px;height:auto;width:auto} /* 2x bigger */
+  .lines .big.with-choccy img.choccy{max-height:260px;height:auto;width:auto}
   .lines .mid{font-size:18px;margin:6px 0 2px}
   .lines .small{font-size:14px;color:#444;margin:2px 0}
   .lines .small.emph{font-weight:700;letter-spacing:.5px}
@@ -187,7 +174,7 @@ app.get('/kiosk', async (req, res) => {
   res.send(html);
 });
 
-// ---------- PDF export of the kiosk poster ----------
+// ---------- PDF export ----------
 app.get('/kiosk.pdf', async (req, res) => {
   let puppeteer;
   try { puppeteer = require('puppeteer'); }
@@ -214,7 +201,7 @@ app.get('/kiosk.pdf', async (req, res) => {
   }
 });
 
-// ---------- QR PNG for printing ----------
+// ---------- QR PNG ----------
 app.get('/kiosk/qr.png', async (req, res) => {
   const scanUrl = `${buildBaseUrl(req)}/kiosk/scan`;
   const buf = await makeQrPngBuffer(scanUrl);
@@ -223,16 +210,32 @@ app.get('/kiosk/qr.png', async (req, res) => {
   res.send(buf);
 });
 
-// ---------- SCAN HANDLER (counts -> redirect with ?ad=) ----------
+// ---------- DEBUG: see which ad & redirect URL will be used ----------
+app.get('/kiosk/debug', (req, res) => {
+  const n = pickAd();
+  const target = new URL(GAME_URL);
+  target.searchParams.set('ad', n);
+  target.searchParams.set('pack', `ad${n}`);
+  res.type('text/plain').send(
+    `FORCE_AD=${FORCE_AD || '(none)'}\n` +
+    `selectedAd=${n}\n` +
+    `redirect=${target.toString()}\n`
+  );
+});
+
+// ---------- SCAN (counts -> redirect) ----------
+// Always override the pack on redirect, and send both ?ad and ?pack for compatibility
 app.get('/kiosk/scan', async (req, res) => {
   await store.bumpScan();
   await store.bumpRedirect();
 
+  const n = pickAd();
   const target = new URL(GAME_URL);
-  // Only add ?ad if not already present (keeps manual overrides)
-  if (!target.searchParams.has('ad')) {
-    target.searchParams.set('ad', pickAd());
-  }
+  target.searchParams.set('ad', n);
+  target.searchParams.set('pack', `ad${n}`);
+
+  console.log(`[scan] FORCE_AD=${FORCE_AD || '(none)'} -> ad=${n}; redirect=${target.toString()}`);
+
   res.set('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
   return res.redirect(302, target.toString());
 });
@@ -269,8 +272,11 @@ app.get('/kiosk/stats.csv', async (req, res) => {
 // Root -> poster
 app.get('/', (req, res) => res.redirect('/kiosk'));
 
-// ---------- BOOT ----------
+// ---------- STORAGE SELECTOR & BOOT ----------
+const store = DATABASE_URL ? pgStore() : fileStore();
 (async () => {
   if (store.init) await store.init();
-  app.listen(PORT, () => console.log(`Kiosk running on port ${PORT} — FORCE_AD=${FORCE_AD || '(weekday rotation)'}; GAME_URL=${GAME_URL}`));
+  app.listen(PORT, () => {
+    console.log(`Kiosk running on :${PORT} — GAME_URL=${GAME_URL} — FORCE_AD=${FORCE_AD || '(weekday rotation)'}`);
+  });
 })();
