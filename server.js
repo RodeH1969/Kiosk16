@@ -1,4 +1,4 @@
-// server.js — Kiosk poster + daily scan tracking + PDF + FORCE_AD override
+// server.js — Kiosk poster + tracking + PDF + HARD FORCE pack
 
 require('dotenv').config();
 const express = require('express');
@@ -9,31 +9,29 @@ const { Pool } = require('pg');
 
 const app = express();
 
-/* ------------------ CONFIG ------------------ */
+/* ------------ CONFIG ------------ */
 const PORT = process.env.PORT || 3030;
 const ADMIN_KEY = process.env.ADMIN_KEY || null;
 const DATABASE_URL = process.env.DATABASE_URL || null;
 const GAME_URL = process.env.GAME_URL || 'https://flashka.onrender.com';
-// One-change ad control: set 1..7 to force a specific pack (blank = weekday rotation)
-const FORCE_AD = (process.env.FORCE_AD || '').trim();
 
-/* ------------------ STATIC ------------------ */
+// HARD FORCE: set 1..7. If not set, default to 3 (MAFS).
+const FORCE_AD = (process.env.FORCE_AD || '3').trim();
+const FORCED = /^[1-7]$/.test(FORCE_AD) ? FORCE_AD : '3';
+
+/* ------------ STATIC ------------ */
 const PUBLIC_DIR = path.join(__dirname, 'public');
 app.use(express.static(PUBLIC_DIR));
 app.use(express.json());
 
-/* --------------- TIME / HELPERS -------------- */
+/* --------- HELPERS / TZ --------- */
 const BRIS_TZ = 'Australia/Brisbane';
-const DOW_TO_AD = { Mon:1, Tue:2, Wed:3, Thu:4, Fri:5, Sat:6, Sun:7 };
-
 function dayKeyBrisbane(d = new Date()) {
   return new Intl.DateTimeFormat('en-CA', {
     timeZone: BRIS_TZ, year: 'numeric', month: '2-digit', day: '2-digit',
   }).format(d);
 }
-function buildBaseUrl(req) {
-  return `${req.protocol}://${req.get('host')}`;
-}
+function buildBaseUrl(req) { return `${req.protocol}://${req.get('host')}`; }
 async function makeQrPngBuffer(text, opts = {}) {
   return QRCode.toBuffer(text, { errorCorrectionLevel: 'M', margin: 1, scale: 10, ...opts });
 }
@@ -43,13 +41,8 @@ function requireAdmin(req, res) {
   res.status(401).send('Unauthorized. Append ?key=YOUR_ADMIN_KEY to the URL.');
   return 'blocked';
 }
-function pickAd() {
-  if (/^[1-7]$/.test(FORCE_AD)) return FORCE_AD; // forced value
-  const weekday = new Intl.DateTimeFormat('en-AU', { timeZone: BRIS_TZ, weekday: 'short' }).format(new Date());
-  return String(DOW_TO_AD[weekday] || 1);
-}
 
-/* --------------- STORAGE (PG/JSON) -------------- */
+/* -------- STORAGE (PG/JSON) ----- */
 const DATA_DIR = path.join(__dirname, 'data');
 const METRICS_FILE = path.join(DATA_DIR, 'metrics.json');
 
@@ -127,8 +120,8 @@ function pgStore() {
 
 const store = DATABASE_URL ? pgStore() : fileStore();
 
-/* --------------- ROUTES -------------- */
-// Poster page
+/* ------------- ROUTES ------------- */
+// Poster page (shows the scan URL under the QR for sanity)
 app.get('/kiosk', async (req, res) => {
   const scanUrl = `${buildBaseUrl(req)}/kiosk/scan`;
   const dataUrl = await QRCode.toDataURL(scanUrl, { errorCorrectionLevel: 'M', margin: 1, scale: 10 });
@@ -146,22 +139,22 @@ app.get('/kiosk', async (req, res) => {
   .logo{max-width:460px;width:100%;height:auto;object-fit:contain;display:block;margin:6px auto 8px}
   .qrBox{display:inline-block;border:1px solid #e7e7e7;border-radius:14px;padding:14px;background:#fff;margin:2px auto 8px}
   .qrBox img{width:min(320px,72vw);height:auto;display:block}
+  .scanurl{font-size:12px;color:#777;margin-top:6px;user-select:all}
   .lines{margin-top:6px;line-height:1.35}
   .lines .big{font-size:32px;margin:6px 0 2px}
   .lines .big.with-choccy{display:inline-flex;align-items:center;gap:12px;justify-content:center;flex-wrap:wrap}
-  .lines .big.with-choccy .title{
-    font-family:'Bangers',system-ui,Arial,Helvetica,sans-serif;color:#d32f2f;font-weight:700;letter-spacing:.5px;text-transform:uppercase;line-height:1;
-  }
+  .lines .big.with-choccy .title{font-family:'Bangers',system-ui,Arial,Helvetica,sans-serif;color:#d32f2f;font-weight:700;letter-spacing:.5px;text-transform:uppercase;line-height:1;}
   .lines .big.with-choccy img.choccy{max-height:260px;height:auto;width:auto}
   .lines .mid{font-size:18px;margin:6px 0 2px}
   .lines .small{font-size:14px;color:#444;margin:2px 0}
   .lines .small.emph{font-weight:700;letter-spacing:.5px}
-  @media print { body{background:#fff} .wrap{box-shadow:none;border:none} }
+  @media print { body{background:#fff} .wrap{box-shadow:none;border:none} .scanurl{color:#999} }
 </style>
 </head><body>
   <div class="wrap">
     <img class="logo" src="/flashka_logo.png" alt="Flashka"/>
     <div class="qrBox"><img src="${dataUrl}" alt="Scan to play"/></div>
+    <div class="scanurl">${scanUrl}</div>
     <div class="lines">
       <div class="big with-choccy">
         <span class="title">Win a CHOCCY!</span>
@@ -176,7 +169,7 @@ app.get('/kiosk', async (req, res) => {
   res.send(html);
 });
 
-// PDF export of the poster
+// PDF export
 app.get('/kiosk.pdf', async (req, res) => {
   let puppeteer;
   try { puppeteer = require('puppeteer'); }
@@ -212,35 +205,40 @@ app.get('/kiosk/qr.png', async (req, res) => {
   res.send(buf);
 });
 
-// Debug: see chosen ad and final redirect
+// DEBUG: see chosen ad & redirect
 app.get('/kiosk/debug', (req, res) => {
-  const n = pickAd();
+  const qa = (req.query.ad || '').trim();
+  const n = /^[1-7]$/.test(qa) ? qa : FORCED;
   const target = new URL(GAME_URL);
   target.searchParams.set('ad', n);
   target.searchParams.set('pack', `ad${n}`);
   target.searchParams.set('t', Date.now().toString());
   res.type('text/plain').send(
-    `FORCE_AD=${FORCE_AD || '(none)'}\n` +
+    `FORCE_AD=${FORCE_AD || '(unset -> default 3)'}\n` +
+    `override(ad query)=${qa || '(none)'}\n` +
     `selectedAd=${n}\n` +
     `redirect=${target.toString()}\n`
   );
 });
 
-// Scan: count then redirect, always adding ?ad & ?pack & cache-buster
+// SCAN: count -> redirect (hard force, allows ?ad override for testing)
 app.get('/kiosk/scan', async (req, res) => {
   await store.bumpScan();
   await store.bumpRedirect();
-  const n = pickAd();
+
+  const qa = (req.query.ad || '').trim();            // optional test override
+  const n = /^[1-7]$/.test(qa) ? qa : FORCED;        // default to FORCED (MAFS=3)
   const target = new URL(GAME_URL);
   target.searchParams.set('ad', n);
   target.searchParams.set('pack', `ad${n}`);
-  target.searchParams.set('t', Date.now().toString()); // cache-bust the game index
-  console.log(`[scan] FORCE_AD=${FORCE_AD || '(none)'} -> ad=${n}; redirect=${target.toString()}`);
+  target.searchParams.set('t', Date.now().toString()); // cache-bust the static site
+
+  console.log(`[scan] FORCE_AD=${FORCE_AD || '(unset->3)'} override=${qa || '-'} -> ad=${n}; redirect=${target.toString()}`);
   res.set('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
   return res.redirect(302, target.toString());
 });
 
-// Stats
+// STATS
 app.get('/kiosk/stats', async (req, res) => {
   if (requireAdmin(req, res)) return;
   const rows = await store.getMetricsRows();
@@ -270,10 +268,11 @@ app.get('/kiosk/stats.csv', async (req, res) => {
 // Root -> poster
 app.get('/', (req, res) => res.redirect('/kiosk'));
 
-/* ------------------ BOOT ------------------ */
+/* ------------- BOOT ------------- */
+const store = DATABASE_URL ? pgStore() : fileStore();
 (async () => {
   if (store.init) await store.init();
   app.listen(PORT, () => {
-    console.log(`Kiosk running on :${PORT} — GAME_URL=${GAME_URL} — FORCE_AD=${FORCE_AD || '(weekday rotation)'}`);
+    console.log(`Kiosk :${PORT}  GAME_URL=${GAME_URL}  FORCE_AD=${FORCED} (env=${FORCE_AD || 'unset'})`);
   });
 })();
