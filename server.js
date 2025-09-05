@@ -122,7 +122,7 @@ function pgStore() {
 const store = DATABASE_URL ? pgStore() : fileStore();
 
 /* ------------- ROUTES ------------- */
-// Poster page (shows the scan URL under the QR)
+// Poster page (NO scan URL line shown)
 app.get('/kiosk', async (req, res) => {
   const scanUrl = `${buildBaseUrl(req)}/kiosk/scan`;
   const dataUrl = await QRCode.toDataURL(scanUrl, { errorCorrectionLevel: 'M', margin: 1, scale: 10 });
@@ -140,7 +140,6 @@ app.get('/kiosk', async (req, res) => {
   .logo{max-width:460px;width:100%;height:auto;object-fit:contain;display:block;margin:6px auto 8px}
   .qrBox{display:inline-block;border:1px solid #e7e7e7;border-radius:14px;padding:14px;background:#fff;margin:2px auto 8px}
   .qrBox img{width:min(320px,72vw);height:auto;display:block}
-  .scanurl{font-size:12px;color:#777;margin-top:6px;user-select:all}
   .lines{margin-top:6px;line-height:1.35}
   .lines .big{font-size:32px;margin:6px 0 2px}
   .lines .big.with-choccy{display:inline-flex;align-items:center;gap:12px;justify-content:center;flex-wrap:wrap}
@@ -149,13 +148,12 @@ app.get('/kiosk', async (req, res) => {
   .lines .mid{font-size:18px;margin:6px 0 2px}
   .lines .small{font-size:14px;color:#444;margin:2px 0}
   .lines .small.emph{font-weight:700;letter-spacing:.5px}
-  @media print { body{background:#fff} .wrap{box-shadow:none;border:none} .scanurl{color:#999} }
+  @media print { body{background:#fff} .wrap{box-shadow:none;border:none} }
 </style>
 </head><body>
   <div class="wrap">
     <img class="logo" src="/flashka_logo.png" alt="Flashka"/>
     <div class="qrBox"><img src="${dataUrl}" alt="Scan to play"/></div>
-    <div class="scanurl">${scanUrl}</div>
     <div class="lines">
       <div class="big with-choccy">
         <span class="title">Win a CHOCCY!</span>
