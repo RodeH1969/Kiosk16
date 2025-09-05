@@ -118,7 +118,7 @@ function pgStore() {
   };
 }
 
-/* >>> SINGLE store declaration (DO NOT redeclare anywhere else) <<< */
+/* >>> SINGLE store declaration <<< */
 const store = DATABASE_URL ? pgStore() : fileStore();
 
 /* ------------- ROUTES ------------- */
@@ -202,7 +202,7 @@ app.get('/kiosk/qr.png', async (req, res) => {
   const scanUrl = `${buildBaseUrl(req)}/kiosk/scan`;
   const buf = await makeQrPngBuffer(scanUrl);
   res.setHeader('Content-Type', 'image/png');
-  res.setHeader('Content-Disposition', 'inline; filename="kiosk-qr.png"");
+  res.setHeader('Content-Disposition', 'inline; filename="kiosk-qr.png"');
   res.send(buf);
 });
 
