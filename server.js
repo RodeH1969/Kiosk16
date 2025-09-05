@@ -1,4 +1,4 @@
-// server.js — Kiosk poster + tracking + PDF + HARD FORCE pack
+// server.js — Kiosk poster + tracking + PDF + hard-force ad pack
 
 require('dotenv').config();
 const express = require('express');
@@ -15,7 +15,7 @@ const ADMIN_KEY = process.env.ADMIN_KEY || null;
 const DATABASE_URL = process.env.DATABASE_URL || null;
 const GAME_URL = process.env.GAME_URL || 'https://flashka.onrender.com';
 
-// HARD FORCE: set 1..7. If not set, default to 3 (MAFS).
+// HARD FORCE: set 1..7 via env; if unset/invalid, default to 3 (MAFS)
 const FORCE_AD = (process.env.FORCE_AD || '3').trim();
 const FORCED = /^[1-7]$/.test(FORCE_AD) ? FORCE_AD : '3';
 
@@ -118,10 +118,11 @@ function pgStore() {
   };
 }
 
+/* >>> SINGLE store declaration (DO NOT redeclare anywhere else) <<< */
 const store = DATABASE_URL ? pgStore() : fileStore();
 
 /* ------------- ROUTES ------------- */
-// Poster page (shows the scan URL under the QR for sanity)
+// Poster page (shows the scan URL under the QR)
 app.get('/kiosk', async (req, res) => {
   const scanUrl = `${buildBaseUrl(req)}/kiosk/scan`;
   const dataUrl = await QRCode.toDataURL(scanUrl, { errorCorrectionLevel: 'M', margin: 1, scale: 10 });
@@ -201,11 +202,11 @@ app.get('/kiosk/qr.png', async (req, res) => {
   const scanUrl = `${buildBaseUrl(req)}/kiosk/scan`;
   const buf = await makeQrPngBuffer(scanUrl);
   res.setHeader('Content-Type', 'image/png');
-  res.setHeader('Content-Disposition', 'inline; filename="kiosk-qr.png"');
+  res.setHeader('Content-Disposition', 'inline; filename="kiosk-qr.png"");
   res.send(buf);
 });
 
-// DEBUG: see chosen ad & redirect
+// DEBUG: chosen ad & redirect
 app.get('/kiosk/debug', (req, res) => {
   const qa = (req.query.ad || '').trim();
   const n = /^[1-7]$/.test(qa) ? qa : FORCED;
@@ -221,17 +222,17 @@ app.get('/kiosk/debug', (req, res) => {
   );
 });
 
-// SCAN: count -> redirect (hard force, allows ?ad override for testing)
+// SCAN: count -> redirect (hard force, optional ?ad override)
 app.get('/kiosk/scan', async (req, res) => {
   await store.bumpScan();
   await store.bumpRedirect();
 
-  const qa = (req.query.ad || '').trim();            // optional test override
-  const n = /^[1-7]$/.test(qa) ? qa : FORCED;        // default to FORCED (MAFS=3)
+  const qa = (req.query.ad || '').trim();      // optional test override
+  const n = /^[1-7]$/.test(qa) ? qa : FORCED;  // default to FORCED (MAFS=3)
   const target = new URL(GAME_URL);
   target.searchParams.set('ad', n);
   target.searchParams.set('pack', `ad${n}`);
-  target.searchParams.set('t', Date.now().toString()); // cache-bust the static site
+  target.searchParams.set('t', Date.now().toString()); // cache-bust static site
 
   console.log(`[scan] FORCE_AD=${FORCE_AD || '(unset->3)'} override=${qa || '-'} -> ad=${n}; redirect=${target.toString()}`);
   res.set('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
@@ -269,7 +270,6 @@ app.get('/kiosk/stats.csv', async (req, res) => {
 app.get('/', (req, res) => res.redirect('/kiosk'));
 
 /* ------------- BOOT ------------- */
-const store = DATABASE_URL ? pgStore() : fileStore();
 (async () => {
   if (store.init) await store.init();
   app.listen(PORT, () => {
