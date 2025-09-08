@@ -1,19 +1,17 @@
-// server.js — Kiosk poster + tracking + PDF + hard-force ad pack + scan cooldown
+// server.js — Kiosk poster + tracking + hard-force ad pack + scan cooldown (File storage only)
 
 require('dotenv').config();
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
 const QRCode = require('qrcode');
-const { Pool } = require('pg');
 
 const app = express();
 
 /* ------------ CONFIG ------------ */
 const PORT = process.env.PORT || 3030;
 const ADMIN_KEY = process.env.ADMIN_KEY || null;
-const DATABASE_URL = process.env.DATABASE_URL || null;
-const GAME_URL = process.env.GAME_URL || 'https://flashka.onrender.com';
+const GAME_URL = process.env.GAME_URL || 'https://flashka16.onrender.com';
 
 // HARD FORCE: set 1..7 via env; if unset/invalid, default to 3 (MAFS)
 const FORCE_AD = (process.env.FORCE_AD || '3').trim();
@@ -35,9 +33,6 @@ function dayKeyBrisbane(d = new Date()) {
   }).format(d);
 }
 function buildBaseUrl(req) { return `${req.protocol}://${req.get('host')}`; }
-async function makeQrPngBuffer(text, opts = {}) {
-  return QRCode.toBuffer(text, { errorCorrectionLevel: 'M', margin: 1, scale: 10, ...opts });
-}
 function requireAdmin(req, res) {
   if (!ADMIN_KEY) return null;
   if ((req.query.key || '') === ADMIN_KEY) return null;
@@ -45,7 +40,7 @@ function requireAdmin(req, res) {
   return 'blocked';
 }
 
-/* -------- STORAGE (PG/JSON) ----- */
+/* -------- STORAGE (FILE ONLY) ----- */
 const DATA_DIR = path.join(__dirname, 'data');
 const METRICS_FILE = path.join(DATA_DIR, 'metrics.json');
 
@@ -58,7 +53,6 @@ function fileStore() {
   let metrics = loadJson(METRICS_FILE, { tz: BRIS_TZ, days: {} });
   const saveMetrics = () => saveJson(METRICS_FILE, metrics);
   return {
-    async init() {},
     async bumpScan() {
       const day = dayKeyBrisbane();
       if (!metrics.days[day]) metrics.days[day] = { qr_scans: 0, redirects: 0 };
@@ -77,52 +71,7 @@ function fileStore() {
   };
 }
 
-function pgStore() {
-  const pool = new Pool({ connectionString: DATABASE_URL, ssl: { rejectUnauthorized: false }, max: 5 });
-  return {
-    async init() {
-      await pool.query(`
-        CREATE TABLE IF NOT EXISTS metrics_days (
-          day DATE PRIMARY KEY,
-          qr_scans INTEGER NOT NULL DEFAULT 0,
-          redirects INTEGER NOT NULL DEFAULT 0
-        );`);
-    },
-    async bumpScan() {
-      const day = dayKeyBrisbane();
-      await pool.query(
-        `INSERT INTO metrics_days(day, qr_scans, redirects)
-         VALUES ($1::date, 1, 0)
-         ON CONFLICT (day) DO UPDATE SET qr_scans = metrics_days.qr_scans + 1`, [day]);
-    },
-    async bumpRedirect() {
-      const day = dayKeyBrisbane();
-      await pool.query(
-        `INSERT INTO metrics_days(day, qr_scans, redirects)
-         VALUES ($1::date, 0, 1)
-         ON CONFLICT (day) DO UPDATE SET redirects = metrics_days.redirects + 1`, [day]);
-    },
-    async getMetrics() {
-      const r = await pool.query(`SELECT day, qr_scans, redirects FROM metrics_days ORDER BY day`);
-      const out = { tz: BRIS_TZ, days: {} };
-      for (const row of r.rows) {
-        const d = (row.day instanceof Date ? row.day : new Date(row.day)).toISOString().slice(0, 10);
-        out.days[d] = { qr_scans: Number(row.qr_scans) || 0, redirects: Number(row.redirects) || 0 };
-      }
-      return out;
-    },
-    async getMetricsRows() {
-      const r = await pool.query(`SELECT day, qr_scans, redirects FROM metrics_days ORDER BY day`);
-      return r.rows.map((row) => {
-        const d = (row.day instanceof Date ? row.day : new Date(row.day)).toISOString().slice(0, 10);
-        return { day: d, qr_scans: Number(row.qr_scans) || 0, redirects: Number(row.redirects) || 0 };
-      });
-    },
-  };
-}
-
-/* >>> SINGLE store declaration <<< */
-const store = DATABASE_URL ? pgStore() : fileStore();
+const store = fileStore();
 
 /* ----------- SCAN COOLDOWN ----------- */
 const SCAN_COOLDOWN_MINUTES = 60; // 1 hour between scans per IP
@@ -162,7 +111,7 @@ function getRemainingCooldown(ip) {
 }
 
 /* ------------- ROUTES ------------- */
-// Poster page (NO scan URL line shown)
+// Poster page
 app.get('/kiosk', async (req, res) => {
   const scanUrl = `${buildBaseUrl(req)}/kiosk/scan`;
   const dataUrl = await QRCode.toDataURL(scanUrl, { errorCorrectionLevel: 'M', margin: 1, scale: 10 });
@@ -208,59 +157,16 @@ app.get('/kiosk', async (req, res) => {
   res.send(html);
 });
 
-// PDF export
-app.get('/kiosk.pdf', async (req, res) => {
-  let puppeteer;
-  try { puppeteer = require('puppeteer'); }
-  catch { res.status(500).send('Puppeteer not installed. Run: npm install puppeteer'); return; }
-
-  const targetUrl = `${buildBaseUrl(req)}/kiosk`;
-  const size = String(req.query.size || 'A4').toUpperCase();
-  const margin = String(req.query.margin || '10mm');
-
-  let browser;
-  try {
-    browser = await puppeteer.launch({ headless: 'new', args: ['--no-sandbox','--disable-setuid-sandbox'] });
-    const page = await browser.newPage();
-    await page.goto(targetUrl, { waitUntil: 'networkidle0', timeout: 60000 });
-    const pdf = await page.pdf({ format: size, printBackground: true, margin: { top: margin, right: margin, bottom: margin, left: margin } });
-    await browser.close();
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `inline; filename="kiosk-${size.toLowerCase()}.pdf"`);
-    res.send(pdf);
-  } catch (err) {
-    if (browser) { try { await browser.close(); } catch {} }
-    console.error('PDF error:', err);
-    res.status(500).send('Failed to generate PDF.');
-  }
-});
-
 // QR PNG
 app.get('/kiosk/qr.png', async (req, res) => {
   const scanUrl = `${buildBaseUrl(req)}/kiosk/scan`;
-  const buf = await makeQrPngBuffer(scanUrl);
+  const buf = await QRCode.toBuffer(scanUrl, { errorCorrectionLevel: 'M', margin: 1, scale: 10 });
   res.setHeader('Content-Type', 'image/png');
   res.setHeader('Content-Disposition', 'inline; filename="kiosk-qr.png"');
   res.send(buf);
 });
 
-// DEBUG: chosen ad & redirect
-app.get('/kiosk/debug', (req, res) => {
-  const qa = (req.query.ad || '').trim();
-  const n = /^[1-7]$/.test(qa) ? qa : FORCED;
-  const target = new URL(GAME_URL);
-  target.searchParams.set('ad', n);
-  target.searchParams.set('pack', `ad${n}`);
-  target.searchParams.set('t', Date.now().toString());
-  res.type('text/plain').send(
-    `FORCE_AD=${FORCE_AD || '(unset -> default 3)'}\n` +
-    `override(ad query)=${qa || '(none)'}\n` +
-    `selectedAd=${n}\n` +
-    `redirect=${target.toString()}\n`
-  );
-});
-
-// SCAN: check cooldown -> count -> redirect (hard force, optional ?ad override)
+// SCAN: check cooldown -> count -> redirect
 app.get('/kiosk/scan', async (req, res) => {
   const clientIP = req.ip || req.connection.remoteAddress || 'unknown';
   
@@ -301,14 +207,14 @@ app.get('/kiosk/scan', async (req, res) => {
   await store.bumpScan();
   await store.bumpRedirect();
 
-  const qa = (req.query.ad || '').trim();      // optional test override
-  const n = /^[1-7]$/.test(qa) ? qa : FORCED;  // default to FORCED (MAFS=3)
+  const qa = (req.query.ad || '').trim();
+  const n = /^[1-7]$/.test(qa) ? qa : FORCED;
   const target = new URL(GAME_URL);
   target.searchParams.set('ad', n);
   target.searchParams.set('pack', `ad${n}`);
-  target.searchParams.set('t', Date.now().toString()); // cache-bust static site
+  target.searchParams.set('t', Date.now().toString());
 
-  console.log(`[scan] IP=${clientIP} FORCE_AD=${FORCE_AD || '(unset->3)'} override=${qa || '-'} -> ad=${n}; redirect=${target.toString()}`);
+  console.log(`[scan] IP=${clientIP} FORCE_AD=${FORCE_AD || '(unset->3)'} -> ad=${n}; redirect=${target.toString()}`);
   res.set('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
   return res.redirect(302, target.toString());
 });
@@ -326,27 +232,11 @@ app.get('/kiosk/stats', async (req, res) => {
   <table border="1" cellpadding="5"><tr><th>Date</th><th>Scans</th><th>Redirects</th></tr>${body}</table>
   </body></html>`);
 });
-app.get('/kiosk/stats.json', async (req, res) => {
-  if (requireAdmin(req, res)) return;
-  res.json(await store.getMetrics());
-});
-app.get('/kiosk/stats.csv', async (req, res) => {
-  if (requireAdmin(req, res)) return;
-  const rows = await store.getMetricsRows();
-  let csv = 'date,qr_scans,redirects\n';
-  for (const r of rows) csv += `${r.day},${r.qr_scans||0},${r.redirects||0}\n`;
-  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-  res.setHeader('Content-Disposition', 'attachment; filename="kiosk-stats.csv"');
-  res.send(csv);
-});
 
 // Root -> poster
 app.get('/', (req, res) => res.redirect('/kiosk'));
 
 /* ------------- BOOT ------------- */
-(async () => {
-  if (store.init) await store.init();
-  app.listen(PORT, () => {
-    console.log(`Kiosk :${PORT}  GAME_URL=${GAME_URL}  FORCE_AD=${FORCED} (env=${FORCE_AD || 'unset'})`);
-  });
-})();
+app.listen(PORT, () => {
+  console.log(`Kiosk :${PORT}  GAME_URL=${GAME_URL}  FORCE_AD=${FORCED} (env=${FORCE_AD || 'unset'})`);
+});
