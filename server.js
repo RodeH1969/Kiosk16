@@ -1,4 +1,4 @@
-// server.js — Kiosk poster + tracking + PDF + hard-force ad pack
+// server.js — Kiosk poster + tracking + PDF + hard-force ad pack + scan cooldown
 
 require('dotenv').config();
 const express = require('express');
@@ -23,6 +23,9 @@ const FORCED = /^[1-7]$/.test(FORCE_AD) ? FORCE_AD : '3';
 const PUBLIC_DIR = path.join(__dirname, 'public');
 app.use(express.static(PUBLIC_DIR));
 app.use(express.json());
+
+// Trust proxy for IP detection
+app.set('trust proxy', true);
 
 /* --------- HELPERS / TZ --------- */
 const BRIS_TZ = 'Australia/Brisbane';
@@ -121,6 +124,43 @@ function pgStore() {
 /* >>> SINGLE store declaration <<< */
 const store = DATABASE_URL ? pgStore() : fileStore();
 
+/* ----------- SCAN COOLDOWN ----------- */
+const SCAN_COOLDOWN_MINUTES = 60; // 1 hour between scans per IP
+const recentScans = new Map(); // IP -> timestamp
+
+function isRecentScan(ip) {
+  const now = Date.now();
+  const lastScan = recentScans.get(ip);
+  
+  if (!lastScan) return false;
+  
+  const cooldownMs = SCAN_COOLDOWN_MINUTES * 60 * 1000;
+  return (now - lastScan) < cooldownMs;
+}
+
+function recordScan(ip) {
+  recentScans.set(ip, Date.now());
+  
+  // Clean old entries (older than 2x cooldown)
+  const cutoff = Date.now() - (SCAN_COOLDOWN_MINUTES * 2 * 60 * 1000);
+  for (const [scanIp, timestamp] of recentScans.entries()) {
+    if (timestamp < cutoff) {
+      recentScans.delete(scanIp);
+    }
+  }
+}
+
+function getRemainingCooldown(ip) {
+  const lastScan = recentScans.get(ip);
+  if (!lastScan) return 0;
+  
+  const now = Date.now();
+  const cooldownMs = SCAN_COOLDOWN_MINUTES * 60 * 1000;
+  const remaining = cooldownMs - (now - lastScan);
+  
+  return Math.max(0, Math.ceil(remaining / (60 * 1000))); // minutes
+}
+
 /* ------------- ROUTES ------------- */
 // Poster page (NO scan URL line shown)
 app.get('/kiosk', async (req, res) => {
@@ -130,7 +170,7 @@ app.get('/kiosk', async (req, res) => {
   const html = `<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Flashka – Scan to Play</title>
+<title>Flashka — Scan to Play</title>
 <link href="https://fonts.googleapis.com/css2?family=Bangers&display=swap" rel="stylesheet">
 <style>
   :root{--card-w:min(560px,94vw)}
@@ -220,8 +260,44 @@ app.get('/kiosk/debug', (req, res) => {
   );
 });
 
-// SCAN: count -> redirect (hard force, optional ?ad override)
+// SCAN: check cooldown -> count -> redirect (hard force, optional ?ad override)
 app.get('/kiosk/scan', async (req, res) => {
+  const clientIP = req.ip || req.connection.remoteAddress || 'unknown';
+  
+  // Check if this IP scanned recently
+  if (isRecentScan(clientIP)) {
+    const remainingMinutes = getRemainingCooldown(clientIP);
+    
+    const html = `<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Flashka - Please Wait</title>
+<link href="https://fonts.googleapis.com/css2?family=Bangers&display=swap" rel="stylesheet">
+<style>
+  body{margin:0;background:#f6f6f6;color:#111;font-family:Arial,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh}
+  .wrap{max-width:500px;background:#fff;border-radius:20px;padding:30px;text-align:center;box-shadow:0 10px 36px rgba(0,0,0,.08)}
+  .title{font-family:'Bangers',sans-serif;font-size:48px;color:#d32f2f;margin-bottom:20px}
+  .message{font-size:18px;line-height:1.6;margin-bottom:15px}
+  .time{font-size:24px;font-weight:bold;color:#28a745;margin-bottom:20px}
+  .note{font-size:14px;color:#666}
+</style>
+</head><body>
+  <div class="wrap">
+    <div class="title">Thanks for Playing!</div>
+    <div class="message">You can play Flashka again in:</div>
+    <div class="time">${remainingMinutes} minute${remainingMinutes !== 1 ? 's' : ''}</div>
+    <div class="note">Enjoy your coffee!</div>
+  </div>
+</body></html>`;
+    
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+    return res.send(html);
+  }
+  
+  // Record this scan and proceed
+  recordScan(clientIP);
+  
   await store.bumpScan();
   await store.bumpRedirect();
 
@@ -232,7 +308,7 @@ app.get('/kiosk/scan', async (req, res) => {
   target.searchParams.set('pack', `ad${n}`);
   target.searchParams.set('t', Date.now().toString()); // cache-bust static site
 
-  console.log(`[scan] FORCE_AD=${FORCE_AD || '(unset->3)'} override=${qa || '-'} -> ad=${n}; redirect=${target.toString()}`);
+  console.log(`[scan] IP=${clientIP} FORCE_AD=${FORCE_AD || '(unset->3)'} override=${qa || '-'} -> ad=${n}; redirect=${target.toString()}`);
   res.set('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
   return res.redirect(302, target.toString());
 });
@@ -246,7 +322,7 @@ app.get('/kiosk/stats', async (req, res) => {
     : '<tr><td colspan="3" style="text-align:center;color:#777">No data yet</td></tr>';
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.send(`<!doctype html><html><head><title>Kiosk Stats</title></head><body>
-  <h1>Flashka – Kiosk Stats</h1>
+  <h1>Flashka — Kiosk Stats</h1>
   <table border="1" cellpadding="5"><tr><th>Date</th><th>Scans</th><th>Redirects</th></tr>${body}</table>
   </body></html>`);
 });
