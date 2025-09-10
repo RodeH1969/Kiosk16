@@ -74,7 +74,7 @@ function fileStore() {
 const store = fileStore();
 
 /* ----------- SCAN COOLDOWN ----------- */
-const SCAN_COOLDOWN_MINUTES = 60; // 1 hour between scans per IP
+const SCAN_COOLDOWN_MINUTES = 15; // 15 minutes between scans per IP
 const recentScans = new Map(); // IP -> timestamp
 
 function isRecentScan(ip) {
