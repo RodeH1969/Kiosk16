@@ -1,4 +1,4 @@
-// server.js — Kiosk poster + tracking + hard-force ad pack + scan cooldown (File storage only)
+// server.js – Kiosk poster + tracking + hard-force ad pack + scan cooldown (File storage only)
 
 require('dotenv').config();
 const express = require('express');
@@ -13,9 +13,9 @@ const PORT = process.env.PORT || 3030;
 const ADMIN_KEY = process.env.ADMIN_KEY || null;
 const GAME_URL = process.env.GAME_URL || 'https://flashka16.onrender.com';
 
-// HARD FORCE: set 1..7 via env; if unset/invalid, default to 3 (MAFS)
+// HARD FORCE: set 1..8 via env; if unset/invalid, default to 3 (MAFS)
 const FORCE_AD = (process.env.FORCE_AD || '3').trim();
-const FORCED = /^[1-7]$/.test(FORCE_AD) ? FORCE_AD : '3';
+const FORCED = /^[1-8]$/.test(FORCE_AD) ? FORCE_AD : '3';
 
 /* ------------ STATIC ------------ */
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -119,7 +119,7 @@ app.get('/kiosk', async (req, res) => {
   const html = `<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Flashka — Scan to Play</title>
+<title>Flashka – Scan to Play</title>
 <link href="https://fonts.googleapis.com/css2?family=Bangers&display=swap" rel="stylesheet">
 <style>
   :root{--card-w:min(560px,94vw)}
@@ -208,7 +208,7 @@ app.get('/kiosk/scan', async (req, res) => {
   await store.bumpRedirect();
 
   const qa = (req.query.ad || '').trim();
-  const n = /^[1-7]$/.test(qa) ? qa : FORCED;
+  const n = /^[1-8]$/.test(qa) ? qa : FORCED;
   const target = new URL(GAME_URL);
   target.searchParams.set('ad', n);
   target.searchParams.set('pack', `ad${n}`);
@@ -228,7 +228,7 @@ app.get('/kiosk/stats', async (req, res) => {
     : '<tr><td colspan="3" style="text-align:center;color:#777">No data yet</td></tr>';
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.send(`<!doctype html><html><head><title>Kiosk Stats</title></head><body>
-  <h1>Flashka — Kiosk Stats</h1>
+  <h1>Flashka – Kiosk Stats</h1>
   <table border="1" cellpadding="5"><tr><th>Date</th><th>Scans</th><th>Redirects</th></tr>${body}</table>
   </body></html>`);
 });
