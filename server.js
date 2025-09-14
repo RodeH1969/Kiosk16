@@ -192,7 +192,7 @@ app.get('/kiosk/scan', async (req, res) => {
     <div class="title">Thanks for Playing!</div>
     <div class="message">You can play Flashka again in:</div>
     <div class="time">${remainingMinutes} minute${remainingMinutes !== 1 ? 's' : ''}</div>
-    <div class="note">Enjoy your coffee!</div>
+    <div class="note">See you soon!</div>
   </div>
 </body></html>`;
     
