@@ -1,4 +1,4 @@
-// server.js – Kiosk poster + tracking + hard-force ad pack + scan cooldown + Google Sheets
+// server.js – Kiosk poster + tracking + hard-force ad pack + scan cooldown + Google Sheets (FIXED)
 
 require('dotenv').config();
 const express = require('express');
@@ -47,7 +47,7 @@ function requireAdmin(req, res) {
   return 'blocked';
 }
 
-/* -------- GOOGLE SHEETS INTEGRATION ----- */
+/* -------- GOOGLE SHEETS INTEGRATION (FIXED) ----- */
 async function initGoogleSheets() {
   if (!SHEET_ID || !GOOGLE_SERVICE_ACCOUNT_EMAIL || !GOOGLE_PRIVATE_KEY) {
     console.log('Google Sheets not configured - using file storage only');
@@ -81,26 +81,28 @@ async function initGoogleSheets() {
   }
 }
 
-// Helper function to update sheet values
+// Helper function to update sheet values (FIXED)
 async function updateSheetValue(sheet, date, column, increment) {
   if (!sheet) return;
   
   try {
-    await sheet.loadRows();
-    let row = sheet.getRows().find(r => r.get('Date') === date);
+    const rows = await sheet.getRows();
+    let row = rows.find(r => r._rawData[0] === date);
     
     if (!row) {
       // Create new row for today
-      row = await sheet.addRow({
-        Date: date,
-        QR_Scans: 0,
-        Game_Wins: 0,
-        Total_Plays: 0
-      });
+      row = await sheet.addRow([date, 0, 0, 0]);
     }
     
-    const currentValue = parseInt(row.get(column)) || 0;
-    row.set(column, currentValue + increment);
+    // Map column names to indices
+    const columnIndex = {
+      'QR_Scans': 1,
+      'Game_Wins': 2, 
+      'Total_Plays': 3
+    }[column];
+    
+    const currentValue = parseInt(row._rawData[columnIndex]) || 0;
+    row._rawData[columnIndex] = currentValue + increment;
     await row.save();
     
     console.log(`Updated ${column} for ${date}: ${currentValue} -> ${currentValue + increment}`);
@@ -109,7 +111,7 @@ async function updateSheetValue(sheet, date, column, increment) {
   }
 }
 
-// Google Sheets storage functions
+// Google Sheets storage functions (FIXED)
 async function googleSheetsStore() {
   const sheet = await initGoogleSheets();
   
@@ -136,17 +138,17 @@ async function googleSheetsStore() {
       if (!sheet) return { days: {} };
       
       try {
-        await sheet.loadRows();
+        const rows = await sheet.getRows();
         const stats = { days: {} };
         
-        sheet.getRows().forEach(row => {
-          const date = row.get('Date');
+        rows.forEach(row => {
+          const date = row._rawData[0];
           if (date) {
             stats.days[date] = {
-              qr_scans: parseInt(row.get('QR_Scans')) || 0,
-              redirects: parseInt(row.get('QR_Scans')) || 0, // Use QR_Scans for redirects too
-              game_wins: parseInt(row.get('Game_Wins')) || 0,
-              total_plays: parseInt(row.get('Total_Plays')) || 0
+              qr_scans: parseInt(row._rawData[1]) || 0,
+              redirects: parseInt(row._rawData[1]) || 0, // Use QR_Scans for redirects too
+              game_wins: parseInt(row._rawData[2]) || 0,
+              total_plays: parseInt(row._rawData[3]) || 0
             };
           }
         });
