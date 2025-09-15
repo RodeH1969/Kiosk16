@@ -1,10 +1,12 @@
-// server.js – Kiosk poster + tracking + hard-force ad pack + scan cooldown (File storage only)
+// server.js – Kiosk poster + tracking + hard-force ad pack + scan cooldown + Google Sheets
 
 require('dotenv').config();
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
 const QRCode = require('qrcode');
+const { GoogleSpreadsheet } = require('google-spreadsheet');
+const { JWT } = require('google-auth-library');
 
 const app = express();
 
@@ -16,6 +18,11 @@ const GAME_URL = process.env.GAME_URL || 'https://flashka16.onrender.com';
 // HARD FORCE: set 1..8 via env; if unset/invalid, default to 3 (MAFS)
 const FORCE_AD = (process.env.FORCE_AD || '3').trim();
 const FORCED = /^[1-8]$/.test(FORCE_AD) ? FORCE_AD : '3';
+
+// Google Sheets config
+const SHEET_ID = process.env.GOOGLE_SHEET_ID;
+const GOOGLE_SERVICE_ACCOUNT_EMAIL = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
+const GOOGLE_PRIVATE_KEY = process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, '\n');
 
 /* ------------ STATIC ------------ */
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -40,7 +47,120 @@ function requireAdmin(req, res) {
   return 'blocked';
 }
 
-/* -------- STORAGE (FILE ONLY) ----- */
+/* -------- GOOGLE SHEETS INTEGRATION ----- */
+async function initGoogleSheets() {
+  if (!SHEET_ID || !GOOGLE_SERVICE_ACCOUNT_EMAIL || !GOOGLE_PRIVATE_KEY) {
+    console.log('Google Sheets not configured - using file storage only');
+    return null;
+  }
+  
+  try {
+    const serviceAccountAuth = new JWT({
+      email: GOOGLE_SERVICE_ACCOUNT_EMAIL,
+      key: GOOGLE_PRIVATE_KEY,
+      scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+    });
+
+    const doc = new GoogleSpreadsheet(SHEET_ID, serviceAccountAuth);
+    await doc.loadInfo();
+    
+    // Get or create the stats sheet
+    let sheet = doc.sheetsByTitle['Stats'];
+    if (!sheet) {
+      sheet = await doc.addSheet({ 
+        title: 'Stats',
+        headerValues: ['Date', 'QR_Scans', 'Game_Wins', 'Total_Plays']
+      });
+    }
+    
+    console.log('Google Sheets connected successfully');
+    return sheet;
+  } catch (error) {
+    console.error('Google Sheets init error:', error);
+    return null;
+  }
+}
+
+// Helper function to update sheet values
+async function updateSheetValue(sheet, date, column, increment) {
+  if (!sheet) return;
+  
+  try {
+    await sheet.loadRows();
+    let row = sheet.getRows().find(r => r.get('Date') === date);
+    
+    if (!row) {
+      // Create new row for today
+      row = await sheet.addRow({
+        Date: date,
+        QR_Scans: 0,
+        Game_Wins: 0,
+        Total_Plays: 0
+      });
+    }
+    
+    const currentValue = parseInt(row.get(column)) || 0;
+    row.set(column, currentValue + increment);
+    await row.save();
+    
+    console.log(`Updated ${column} for ${date}: ${currentValue} -> ${currentValue + increment}`);
+  } catch (error) {
+    console.error(`Error updating ${column}:`, error);
+  }
+}
+
+// Google Sheets storage functions
+async function googleSheetsStore() {
+  const sheet = await initGoogleSheets();
+  
+  return {
+    async bumpScan() {
+      if (!sheet) return;
+      const today = dayKeyBrisbane();
+      await updateSheetValue(sheet, today, 'QR_Scans', 1);
+    },
+    
+    async bumpWin() {
+      if (!sheet) return;
+      const today = dayKeyBrisbane();
+      await updateSheetValue(sheet, today, 'Game_Wins', 1);
+    },
+    
+    async bumpPlay() {
+      if (!sheet) return;
+      const today = dayKeyBrisbane();
+      await updateSheetValue(sheet, today, 'Total_Plays', 1);
+    },
+    
+    async getStats() {
+      if (!sheet) return { days: {} };
+      
+      try {
+        await sheet.loadRows();
+        const stats = { days: {} };
+        
+        sheet.getRows().forEach(row => {
+          const date = row.get('Date');
+          if (date) {
+            stats.days[date] = {
+              qr_scans: parseInt(row.get('QR_Scans')) || 0,
+              redirects: parseInt(row.get('QR_Scans')) || 0, // Use QR_Scans for redirects too
+              game_wins: parseInt(row.get('Game_Wins')) || 0,
+              total_plays: parseInt(row.get('Total_Plays')) || 0
+            };
+          }
+        });
+        
+        return stats;
+      } catch (error) {
+        console.error('Error getting Google Sheets stats:', error);
+        return { days: {} };
+      }
+    }
+  };
+}
+
+/* -------- STORAGE (FILE BACKUP) ----- */
 const DATA_DIR = path.join(__dirname, 'data');
 const METRICS_FILE = path.join(DATA_DIR, 'metrics.json');
 
@@ -71,7 +191,51 @@ function fileStore() {
   };
 }
 
-const store = fileStore();
+// Hybrid storage (Google Sheets + file backup)
+function hybridStore() {
+  const fileStoreInstance = fileStore();
+  const googleStore = googleSheetsStore();
+  
+  return {
+    async bumpScan() {
+      await fileStoreInstance.bumpScan();
+      await (await googleStore).bumpScan();
+    },
+    
+    async bumpWin() {
+      await (await googleStore).bumpWin();
+    },
+    
+    async bumpPlay() {
+      await (await googleStore).bumpPlay();
+    },
+    
+    async bumpRedirect() {
+      await fileStoreInstance.bumpRedirect();
+    },
+    
+    async getMetrics() {
+      // Try Google Sheets first, fallback to file
+      try {
+        const googleStats = await (await googleStore).getStats();
+        if (Object.keys(googleStats.days).length > 0) {
+          return googleStats;
+        }
+      } catch (error) {
+        console.log('Google Sheets unavailable, using file storage');
+      }
+      return await fileStoreInstance.getMetrics();
+    },
+    
+    async getMetricsRows() {
+      const metrics = await this.getMetrics();
+      const days = Object.keys(metrics.days).sort();
+      return days.map((d) => ({ day: d, ...metrics.days[d] }));
+    }
+  };
+}
+
+const store = hybridStore();
 
 /* ----------- SCAN COOLDOWN ----------- */
 const SCAN_COOLDOWN_MINUTES = 15; // 15 minutes between scans per IP
@@ -219,17 +383,41 @@ app.get('/kiosk/scan', async (req, res) => {
   return res.redirect(302, target.toString());
 });
 
+// API endpoint for game wins
+app.post('/api/win', async (req, res) => {
+  try {
+    await store.bumpWin();
+    console.log('Game win recorded');
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error recording win:', error);
+    res.status(500).json({ error: 'Failed to record win' });
+  }
+});
+
+// API endpoint for game plays
+app.post('/api/play', async (req, res) => {
+  try {
+    await store.bumpPlay();
+    console.log('Game play recorded');
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error recording play:', error);
+    res.status(500).json({ error: 'Failed to record play' });
+  }
+});
+
 // STATS
 app.get('/kiosk/stats', async (req, res) => {
   if (requireAdmin(req, res)) return;
   const rows = await store.getMetricsRows();
   const body = rows.length
-    ? rows.map(r => `<tr><td>${r.day}</td><td style="text-align:right">${r.qr_scans||0}</td><td style="text-align:right">${r.redirects||0}</td></tr>`).join('')
-    : '<tr><td colspan="3" style="text-align:center;color:#777">No data yet</td></tr>';
+    ? rows.map(r => `<tr><td>${r.day}</td><td style="text-align:right">${r.qr_scans||0}</td><td style="text-align:right">${r.redirects||0}</td><td style="text-align:right">${r.game_wins||0}</td><td style="text-align:right">${r.total_plays||0}</td></tr>`).join('')
+    : '<tr><td colspan="5" style="text-align:center;color:#777">No data yet</td></tr>';
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.send(`<!doctype html><html><head><title>Kiosk Stats</title></head><body>
   <h1>Flashka – Kiosk Stats</h1>
-  <table border="1" cellpadding="5"><tr><th>Date</th><th>Scans</th><th>Redirects</th></tr>${body}</table>
+  <table border="1" cellpadding="5"><tr><th>Date</th><th>QR Scans</th><th>Redirects</th><th>Game Wins</th><th>Total Plays</th></tr>${body}</table>
   </body></html>`);
 });
 
@@ -239,4 +427,5 @@ app.get('/', (req, res) => res.redirect('/kiosk'));
 /* ------------- BOOT ------------- */
 app.listen(PORT, () => {
   console.log(`Kiosk :${PORT}  GAME_URL=${GAME_URL}  FORCE_AD=${FORCED} (env=${FORCE_AD || 'unset'})`);
+  console.log(`Google Sheets: ${SHEET_ID ? 'Configured' : 'Not configured'}`);
 });

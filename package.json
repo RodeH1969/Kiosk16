@@ -6,8 +6,10 @@
     "start": "node server.js"
   },
   "dependencies": {
+    "dotenv": "^16.0.3",
     "express": "^4.18.2",
-    "qrcode": "^1.5.3",
-    "dotenv": "^16.0.3"
+    "google-auth-library": "^10.3.0",
+    "google-spreadsheet": "^5.0.2",
+    "qrcode": "^1.5.3"
   }
 }
