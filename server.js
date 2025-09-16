@@ -240,7 +240,7 @@ function hybridStore() {
 const store = hybridStore();
 
 /* ----------- SCAN COOLDOWN ----------- */
-const SCAN_COOLDOWN_MINUTES = 15; // 15 minutes between scans per IP
+const SCAN_COOLDOWN_MINUTES = 10; // 10 minutes between scans per IP
 const recentScans = new Map(); // IP -> timestamp
 
 function isRecentScan(ip) {
